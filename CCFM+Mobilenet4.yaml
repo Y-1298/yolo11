@@ -1,0 +1,54 @@
+# yolo11_mnv4_ccfm_B.yaml
+# Ultralytics YOLO 🚀, AGPL-3.0
+# MobileNetV4ConvSmall backbone + CCFM neck (B: concat->squeeze to 256 -> CCFM[256])
+
+# Parameters
+nc: 80
+scales:  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, MobileNetV4ConvSmall, [0.25]]     # 0: MobileNetV4 -> returns [P3,P4,P5]
+  - [0, 1, Index, [0]]                        # 1: P3/8
+  - [0, 1, Index, [1]]                        # 2: P4/16
+  - [0, 1, Index, [2]]                        # 3: P5/32
+
+  - [3, 1, Conv, [1024, 1, 1]]                # 4: adapt P5 -> 1024
+  - [4, 1, SPPF, [1024, 5]]                   # 5
+  - [5, 2, C2PSA, [1024]]                     # 6  （可按需减到 1 次或移除以提速）
+
+head:
+  # FPN: P5' -> P4
+  - [6, 1, Conv, [256, 1, 1]]                 # 7: Y5 lateral 256
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]# 8
+  - [2, 1, Conv, [256, 1, 1, None, 1, 1, False]]  # 9: P4 1×1 256
+  - [[-2, -1], 1, Concat, [1]]                # 10: -> 512
+  - [-1, 1, Conv, [256, 1, 1]]                # 11: squeeze to 256
+  - [-1, 2, CCFM, [256]]                      # 12: CCFM@256  ✅ c1==c2
+
+  # FPN: Y4 -> P3
+  - [-1, 1, Conv, [256, 1, 1]]                # 13: Y4 lateral 256
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]# 14
+  - [1, 1, Conv, [256, 1, 1, None, 1, 1, False]]  # 15: P3 1×1 256
+  - [[-2, -1], 1, Concat, [1]]                # 16: -> 512
+  - [-1, 1, Conv, [256, 1, 1]]                # 17: squeeze to 256
+  - [-1, 2, CCFM, [256]]                      # 18: CCFM@256  -> P3 out
+
+  # PAN: bottom-up
+  - [-1, 1, Conv, [256, 3, 2]]                # 19: downsample s=2（可改 DWConv 提速）
+  - [[-1, 13], 1, Concat, [1]]                # 20: + Y4 -> 512
+  - [-1, 1, Conv, [256, 1, 1]]                # 21: squeeze to 256
+  - [-1, 2, CCFM, [256]]                      # 22: CCFM@256  -> P4 out
+
+  - [-1, 1, Conv, [256, 3, 2]]                # 23: downsample s=2（可改 DWConv 提速）
+  - [[-1, 7], 1, Concat, [1]]                 # 24: + Y5 -> 512
+  - [-1, 1, Conv, [256, 1, 1]]                # 25: squeeze to 256
+  - [-1, 2, CCFM, [256]]                      # 26: CCFM@256  -> P5 out
+
+  - [[18, 22, 26], 1, Detect, [nc]]           # 27: Detect(P3,P4,P5)
+
